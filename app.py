@@ -84,12 +84,10 @@ def extract_signature_from_document(img):
 
     return Image.fromarray(cropped)
 
-def similarity_score(img1, img2):
+def similarity_score(img1, img2, model):
     with torch.no_grad():
         o1, o2 = model(preprocess(img1), preprocess(img2))
-        dist = torch.nn.functional.pairwise_distance(o1, o2)
-        return dist.item()
-
+        return torch.nn.functional.cosine_similarity(o1, o2).item()
 # ------------------ STREAMLIT UI ------------------
 
 st.title("✍️ Signature Forgery Detection")
