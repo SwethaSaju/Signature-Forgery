@@ -12,11 +12,22 @@ st.write("Upload **two PDF files** containing signatures to verify authenticity.
 
 # --- Helper Functions ---
 
+import pdfplumber
+
 def pdf_to_image(pdf_file):
-    images = convert_from_bytes(pdf_file.read())
-    img = images[0]
-    img = np.array(img)
-    return img
+    with pdfplumber.open(pdf_file) as pdf:
+        page = pdf.pages[0]
+        if page.images:
+            # Take first image on the page
+            img_obj = page.images[0]
+            # Crop the image
+            bbox = (img_obj["x0"], img_obj["top"], img_obj["x1"], img_obj["bottom"])
+            pil_image = page.to_image(resolution=200).original.crop(bbox)
+            return np.array(pil_image)
+        else:
+            st.error("No images found in PDF.")
+            return None
+
 
 def preprocess(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
