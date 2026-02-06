@@ -4,16 +4,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import transforms
 from PIL import Image
-import numpy as np
 
 # -----------------------------
-# Streamlit Page Config
+# Page Config
 # -----------------------------
-st.set_page_config(page_title="Signature Forgery Detection", layout="centered")
+st.set_page_config(page_title="Signature Forgery Detection")
 st.title("✍️ Signature Forgery Detection")
 
 # -----------------------------
-# Siamese Network Definition
+# Model Definition
 # -----------------------------
 class SiameseNetwork(nn.Module):
     def __init__(self):
@@ -23,7 +22,6 @@ class SiameseNetwork(nn.Module):
             nn.Conv2d(1, 32, 3),
             nn.ReLU(),
             nn.MaxPool2d(2),
-
             nn.Conv2d(32, 64, 3),
             nn.ReLU(),
             nn.MaxPool2d(2),
@@ -56,32 +54,42 @@ def preprocess(img):
     return transform(img).unsqueeze(0)
 
 # -----------------------------
-# Load Model (CACHED)
+# Load Model SAFELY
 # -----------------------------
 @st.cache_resource
 def load_model():
-    model = SiameseNetwork()
-    state = torch.load("siamese_signature.pth", map_location="cpu")
-    model.load_state_dict(state)
+    checkpoint = torch.load(
+        "siamese_signature.pth",
+        map_location="cpu",
+        weights_only=False  # 🔥 CRITICAL FIX
+    )
+
+    # Case 1: full model saved
+    if isinstance(checkpoint, nn.Module):
+        model = checkpoint
+
+    # Case 2: state_dict saved
+    else:
+        model = SiameseNetwork()
+        model.load_state_dict(checkpoint)
+
     model.eval()
     return model
 
-# 🔴 THIS LINE WAS MISSING BEFORE
 model = load_model()
 
 # -----------------------------
-# Similarity Score
+# Similarity Function
 # -----------------------------
 def similarity_score(img1, img2, model):
     with torch.no_grad():
         o1, o2 = model(preprocess(img1), preprocess(img2))
-        score = F.cosine_similarity(o1, o2).item()
-    return score
+        return F.cosine_similarity(o1, o2).item()
 
 # -----------------------------
 # UI
 # -----------------------------
-ref_file = st.file_uploader("Upload Reference (Genuine) Signature", type=["png", "jpg", "jpeg"])
+ref_file = st.file_uploader("Upload Genuine Signature", type=["png", "jpg", "jpeg"])
 test_file = st.file_uploader("Upload Signature to Verify", type=["png", "jpg", "jpeg"])
 
 if ref_file and test_file:
@@ -96,8 +104,8 @@ if ref_file and test_file:
         st.subheader("Similarity Score")
         st.write(f"{score:.4f}")
 
-        # Threshold (can tune)
         if score > 0.80:
             st.success("✅ Genuine Signature")
         else:
             st.error("❌ Forged Signature")
+
