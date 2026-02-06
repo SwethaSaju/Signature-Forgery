@@ -106,7 +106,7 @@ if doc and ref:
     if extracted is None:
         st.error("No signature detected in document.")
     else:
-        score = similarity_score(extracted, reference_img)
+        score = similarity_score(extracted, reference_img, model)
 
         st.image([extracted, reference_img], caption=["Extracted", "Reference"], width=200)
 
