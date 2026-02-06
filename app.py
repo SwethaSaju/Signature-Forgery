@@ -1,7 +1,7 @@
 import os
 import cv2
 import torch
-import requests
+import gdown
 import tempfile
 import numpy as np
 import streamlit as st
@@ -52,17 +52,18 @@ class SiameseNetwork(nn.Module):
 @st.cache_resource
 def load_model():
     if not os.path.exists(MODEL_PATH):
-        with st.spinner("Downloading model..."):
-            r = requests.get(MODEL_URL)
-            with open(MODEL_PATH, "wb") as f:
-                f.write(r.content)
+        with st.spinner("Downloading model from Google Drive..."):
+            gdown.download(
+                "https://drive.google.com/uc?id=1u7JfKw5dzp8xxkeSlpO8XrGxRNuI7f9m",
+                MODEL_PATH,
+                quiet=False
+            )
 
     model = SiameseNetwork()
-    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+    state_dict = torch.load(MODEL_PATH, map_location="cpu")
+    model.load_state_dict(state_dict)
     model.eval()
     return model
-
-model = load_model()
 
 # -------------------------------
 # TRANSFORM
