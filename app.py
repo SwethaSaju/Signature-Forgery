@@ -48,11 +48,16 @@ def load_model():
         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
 
     model = SiameseNetwork()
-    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+
+    state_dict = torch.load(
+        MODEL_PATH,
+        map_location="cpu",
+        weights_only=False   # ✅ REQUIRED for PyTorch 2.6+
+    )
+
+    model.load_state_dict(state_dict)
     model.eval()
     return model
-
-model = load_model()
 
 # ---------------- TRANSFORMS ----------------
 transform = transforms.Compose([
