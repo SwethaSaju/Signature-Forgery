@@ -5,4 +5,4 @@ opencv-python-headless
 pillow
 numpy
 pdf2image
-huggingface_hub
+
