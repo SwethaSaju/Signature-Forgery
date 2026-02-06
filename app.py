@@ -1,7 +1,6 @@
 import os
 import cv2
 import torch
-import gdown
 import numpy as np
 import streamlit as st
 from PIL import Image
@@ -9,16 +8,17 @@ from torchvision import transforms
 import torch.nn as nn
 import torch.nn.functional as F
 from pdf2image import convert_from_bytes
+from huggingface_hub import hf_hub_download
 
 # ---------------- CONFIG ----------------
-MODEL_URL = "https://drive.google.com/uc?id=1u7JfKw5dzp8xxkeSlpO8XrGxRNuI7f9m"
-MODEL_PATH = "siamese_signature.pth"
+REPO_ID = "SwethSwetha/signature-forgery-model"
+MODEL_FILE = "siamese_signature.pth"
 IMAGE_SIZE = 128
 THRESHOLD = 0.65
 
 st.set_page_config(page_title="Signature Forgery Detection", layout="centered")
 
-# ---------------- MODEL ----------------
+# ---------------- MODEL DEFINITION ----------------
 class SiameseNetwork(nn.Module):
     def __init__(self):
         super().__init__()
@@ -40,21 +40,22 @@ class SiameseNetwork(nn.Module):
     def forward(self, x1, x2):
         return self.forward_once(x1), self.forward_once(x2)
 
-# ---------------- LOAD MODEL ----------------
+# ---------------- MODEL LOADING ----------------
 @st.cache_resource
 def load_model():
-    if not os.path.exists(MODEL_PATH):
-        with st.spinner("Downloading model from Google Drive..."):
-            gdown.download(MODEL_URL, MODEL_PATH, quiet=False)
+    model_path = hf_hub_download(
+        repo_id=REPO_ID,
+        filename=MODEL_FILE
+    )
 
     model = SiameseNetwork()
-    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
+    model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()
     return model
 
 model = load_model()
 
-# ---------------- TRANSFORM ----------------
+# ---------------- TRANSFORMS ----------------
 transform = transforms.Compose([
     transforms.Grayscale(),
     transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
@@ -62,64 +63,64 @@ transform = transforms.Compose([
     transforms.Normalize((0.5,), (0.5,))
 ])
 
-def preprocess(img):
+def preprocess(img: Image.Image):
+    """Convert a PIL image into tensor ready for model."""
     return transform(img).unsqueeze(0)
 
-def cosine_sim(a, b):
-    return F.cosine_similarity(a, b).item()
-
 # ---------------- SIGNATURE EXTRACTION ----------------
-def extract_signature(img):
+def extract_signature_from_image(img: Image.Image):
     gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
     blur = cv2.GaussianBlur(gray, (5,5), 0)
     _, thresh = cv2.threshold(
-        blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        blur, 0, 255,
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
     )
 
     contours, _ = cv2.findContours(
         thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
-
     if not contours:
         return None
 
-    x,y,w,h = cv2.boundingRect(max(contours, key=cv2.contourArea))
+    x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
     cropped = gray[y:y+h, x:x+w]
     return Image.fromarray(cropped)
 
-def extract_from_pdf(pdf_bytes):
+def extract_signature_from_pdf(pdf_bytes: bytes):
     pages = convert_from_bytes(pdf_bytes)
-    return extract_signature(pages[0])
+    if len(pages) == 0:
+        return None
+    return extract_signature_from_image(pages[0])
 
-# ---------------- UI ----------------
+# ---------------- STREAMLIT UI ----------------
 st.title("✍️ Signature Forgery Detection")
-st.write("Upload a **reference signature** and a **document (image or PDF)**.")
+st.write("Upload a **reference signature** and a **document (image or PDF)** to check if the signature is genuine.")
 
 ref_file = st.file_uploader("Reference Signature", type=["png","jpg","jpeg"])
-doc_file = st.file_uploader("Document (Image / PDF)", type=["png","jpg","jpeg","pdf"])
+doc_file = st.file_uploader("Document (Image or PDF)", type=["png","jpg","jpeg","pdf"])
 
 if ref_file and doc_file:
     ref_img = Image.open(ref_file)
     st.image(ref_img, caption="Reference Signature", width=250)
 
     if doc_file.type == "application/pdf":
-        sig_img = extract_from_pdf(doc_file.read())
+        sig_img = extract_signature_from_pdf(doc_file.read())
     else:
-        sig_img = extract_signature(Image.open(doc_file))
+        sig_img = extract_signature_from_image(Image.open(doc_file))
 
     if sig_img is None:
-        st.error("❌ Signature not detected in document")
+        st.error("❌ Signature not detected in the document. Try a clearer or higher-resolution scan.")
     else:
-        st.image(sig_img, caption="Extracted Signature", width=250)
+        st.image(sig_img, caption="Extracted Signature from Document", width=250)
 
         with torch.no_grad():
-            e1, e2 = model(preprocess(ref_img), preprocess(sig_img))
-            score = cosine_sim(e1, e2)
+            emb1, emb2 = model(preprocess(ref_img), preprocess(sig_img))
+            score = F.cosine_similarity(emb1, emb2).item()
 
         st.markdown("---")
         st.write(f"### Similarity Score: **{score:.3f}**")
 
         if score >= THRESHOLD:
-            st.success("✅ Genuine Signature")
+            st.success("✅ Signature appears GENUINE")
         else:
-            st.error("❌ Forged Signature")
+            st.error("❌ Signature appears FORGED")
