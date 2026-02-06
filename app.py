@@ -4,6 +4,8 @@ import numpy as np
 from pdf2image import convert_from_bytes
 from skimage.metrics import structural_similarity as ssim
 from PIL import Image
+import pdfplumber
+
 
 st.set_page_config(page_title="Signature Forgery Detection", layout="centered")
 
@@ -12,7 +14,6 @@ st.write("Upload **two PDF files** containing signatures to verify authenticity.
 
 # --- Helper Functions ---
 
-import pdfplumber
 
 def pdf_to_image(pdf_file):
     with pdfplumber.open(pdf_file) as pdf:
