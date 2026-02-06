@@ -1,6 +1,6 @@
 streamlit
 opencv-python-headless
 numpy
-pdf2image
-Pillow
 scikit-image
+pdfplumber
+Pillow
