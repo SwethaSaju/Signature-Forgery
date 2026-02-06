@@ -4,5 +4,5 @@ torchvision==0.16.2
 opencv-python-headless
 pillow
 numpy
-gdown
 pdf2image
+huggingface_hub
