@@ -1,8 +1,7 @@
 streamlit
-torch==2.1.2
-torchvision==0.16.2
-opencv-python-headless
-pillow
+torch>=2.5.0
+torchvision
 numpy
-pdf2image
+Pillow
+scikit-image
 
