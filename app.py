@@ -1,18 +1,24 @@
 import streamlit as st
 import torch
 import torch.nn as nn
-import torchvision.transforms as transforms
-import numpy as np
+import torch.nn.functional as F
+from torchvision import transforms
 from PIL import Image
-from skimage.filters import threshold_otsu
-from skimage.measure import label, regionprops
-import io
+import numpy as np
 
-# ------------------ MODEL ------------------
+# -----------------------------
+# Streamlit Page Config
+# -----------------------------
+st.set_page_config(page_title="Signature Forgery Detection", layout="centered")
+st.title("✍️ Signature Forgery Detection")
 
+# -----------------------------
+# Siamese Network Definition
+# -----------------------------
 class SiameseNetwork(nn.Module):
     def __init__(self):
         super().__init__()
+
         self.cnn = nn.Sequential(
             nn.Conv2d(1, 32, 3),
             nn.ReLU(),
@@ -20,11 +26,11 @@ class SiameseNetwork(nn.Module):
 
             nn.Conv2d(32, 64, 3),
             nn.ReLU(),
-            nn.MaxPool2d(2)
+            nn.MaxPool2d(2),
         )
 
         self.fc = nn.Sequential(
-            nn.Linear(64 * 29 * 29, 256),
+            nn.Linear(64 * 61 * 61, 256),
             nn.ReLU(),
             nn.Linear(256, 128)
         )
@@ -37,82 +43,61 @@ class SiameseNetwork(nn.Module):
     def forward(self, x1, x2):
         return self.forward_once(x1), self.forward_once(x2)
 
-# ------------------ LOAD MODEL ------------------
-
-@st.cache_resource
-def load_model():
-    model = SiameseNetwork()
-
-    state = torch.load(
-        "siamese_signature.pth",
-        map_location="cpu",
-        weights_only=False   # 🔥 CRITICAL FIX
-    )
-
-    model.load_state_dict(state)
-    model.eval()
-    return model
-
-# ------------------ IMAGE UTILS ------------------
-
+# -----------------------------
+# Image Preprocessing
+# -----------------------------
 transform = transforms.Compose([
     transforms.Grayscale(),
-    transforms.Resize((128, 128)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5,), (0.5,))
+    transforms.Resize((256, 256)),
+    transforms.ToTensor()
 ])
 
 def preprocess(img):
     return transform(img).unsqueeze(0)
 
-def extract_signature_from_document(img):
-    img_gray = img.convert("L")
-    img_np = np.array(img_gray)
+# -----------------------------
+# Load Model (CACHED)
+# -----------------------------
+@st.cache_resource
+def load_model():
+    model = SiameseNetwork()
+    state = torch.load("siamese_signature.pth", map_location="cpu")
+    model.load_state_dict(state)
+    model.eval()
+    return model
 
-    thresh = threshold_otsu(img_np)
-    binary = img_np < thresh
+# 🔴 THIS LINE WAS MISSING BEFORE
+model = load_model()
 
-    labeled = label(binary)
-    regions = regionprops(labeled)
-
-    if not regions:
-        return None
-
-    largest = max(regions, key=lambda r: r.area)
-    minr, minc, maxr, maxc = largest.bbox
-    cropped = img_np[minr:maxr, minc:maxc]
-
-    return Image.fromarray(cropped)
-
+# -----------------------------
+# Similarity Score
+# -----------------------------
 def similarity_score(img1, img2, model):
     with torch.no_grad():
         o1, o2 = model(preprocess(img1), preprocess(img2))
-        return torch.nn.functional.cosine_similarity(o1, o2).item()
-# ------------------ STREAMLIT UI ------------------
+        score = F.cosine_similarity(o1, o2).item()
+    return score
 
-st.title("✍️ Signature Forgery Detection")
+# -----------------------------
+# UI
+# -----------------------------
+ref_file = st.file_uploader("Upload Reference (Genuine) Signature", type=["png", "jpg", "jpeg"])
+test_file = st.file_uploader("Upload Signature to Verify", type=["png", "jpg", "jpeg"])
 
-doc = st.file_uploader("Upload Signed Document", ["png", "jpg", "jpeg"])
-ref = st.file_uploader("Upload Reference Signature", ["png", "jpg", "jpeg"])
+if ref_file and test_file:
+    ref_img = Image.open(ref_file).convert("RGB")
+    test_img = Image.open(test_file).convert("RGB")
 
-if doc and ref:
-    document_img = Image.open(doc)
-    reference_img = Image.open(ref)
+    st.image([ref_img, test_img], caption=["Reference", "Test"], width=250)
 
-    extracted = extract_signature_from_document(document_img)
+    if st.button("Verify Signature"):
+        score = similarity_score(ref_img, test_img, model)
 
-    if extracted is None:
-        st.error("No signature detected in document.")
-    else:
-        score = similarity_score(extracted, reference_img, model)
+        st.subheader("Similarity Score")
+        st.write(f"{score:.4f}")
 
-        st.image([extracted, reference_img], caption=["Extracted", "Reference"], width=200)
-
-        st.subheader(f"Similarity Distance: {score:.4f}")
-
-        if score < 1.0:
+        # Threshold (can tune)
+        if score > 0.80:
             st.success("✅ Genuine Signature")
         else:
             st.error("❌ Forged Signature")
-
-
