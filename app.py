@@ -1,18 +1,30 @@
-import streamlit as st
-import torch
-import torch.nn as nn
-import torchvision.transforms as transforms
-from PIL import Image
-import numpy as np
-import cv2
-from pdf2image import convert_from_bytes
-import tempfile
 import os
+import cv2
+import torch
+import requests
+import tempfile
+import numpy as np
+import streamlit as st
+from PIL import Image
+from torchvision import transforms
+import torch.nn as nn
+import torch.nn.functional as F
+from pdf2image import convert_from_bytes
 
-# -------------------------
-# MODEL (same as notebook)
-# -------------------------
-class SiameseCNN(nn.Module):
+# -------------------------------
+# CONFIG
+# -------------------------------
+MODEL_URL = "https://drive.google.com/uc?id=1u7JfKw5dzp8xxkeSlpO8XrGxRNuI7f9m"
+MODEL_PATH = "siamese_signature.pth"
+IMAGE_SIZE = 128
+THRESHOLD = 0.65   # similarity threshold (can tune)
+
+st.set_page_config(page_title="Signature Verification", layout="centered")
+
+# -------------------------------
+# MODEL DEFINITION
+# -------------------------------
+class SiameseNetwork(nn.Module):
     def __init__(self):
         super().__init__()
         self.cnn = nn.Sequential(
@@ -20,109 +32,114 @@ class SiameseCNN(nn.Module):
             nn.MaxPool2d(2),
             nn.Conv2d(32, 64, 3), nn.ReLU(),
             nn.MaxPool2d(2),
-            nn.Flatten(),
-            nn.Linear(64 * 30 * 30, 128)
+            nn.Flatten()
+        )
+        self.fc = nn.Sequential(
+            nn.Linear(64 * 30 * 30, 256),
+            nn.ReLU()
         )
 
     def forward_once(self, x):
-        return self.cnn(x)
+        x = self.cnn(x)
+        return self.fc(x)
 
     def forward(self, x1, x2):
         return self.forward_once(x1), self.forward_once(x2)
 
-# -------------------------
-# LOAD MODEL
-# -------------------------
+# -------------------------------
+# LOAD MODEL (Google Drive)
+# -------------------------------
 @st.cache_resource
 def load_model():
-    model = SiameseCNN()
-    model.load_state_dict(torch.load("siamese_signature.pth", map_location="cpu"))
+    if not os.path.exists(MODEL_PATH):
+        with st.spinner("Downloading model..."):
+            r = requests.get(MODEL_URL)
+            with open(MODEL_PATH, "wb") as f:
+                f.write(r.content)
+
+    model = SiameseNetwork()
+    model.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
     model.eval()
     return model
 
 model = load_model()
 
-# -------------------------
+# -------------------------------
 # TRANSFORM
-# -------------------------
+# -------------------------------
 transform = transforms.Compose([
     transforms.Grayscale(),
-    transforms.Resize((128, 128)),
-    transforms.ToTensor()
+    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
 ])
 
-# -------------------------
+# -------------------------------
+# IMAGE UTILS
+# -------------------------------
+def preprocess_image(img):
+    img = img.convert("RGB")
+    return transform(img).unsqueeze(0)
+
+def cosine_similarity(a, b):
+    return F.cosine_similarity(a, b).item()
+
+# -------------------------------
 # SIGNATURE EXTRACTION
-# -------------------------
-def extract_signature(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    blur = cv2.GaussianBlur(gray, (5,5), 0)
-    _, thresh = cv2.threshold(blur, 0, 255,
-                              cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+# -------------------------------
+def extract_signature_from_image(img):
+    img = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+    blur = cv2.GaussianBlur(img, (5,5), 0)
+    _, thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL,
-                                   cv2.CHAIN_APPROX_SIMPLE)
-
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if len(contours) == 0:
         return None
 
-    c = max(contours, key=cv2.contourArea)
-    x,y,w,h = cv2.boundingRect(c)
-    return img[y:y+h, x:x+w]
+    largest = max(contours, key=cv2.contourArea)
+    x,y,w,h = cv2.boundingRect(largest)
+    cropped = img[y:y+h, x:x+w]
 
-# -------------------------
-# PDF → IMAGE
-# -------------------------
-def pdf_to_image(pdf_bytes):
+    return Image.fromarray(cropped)
+
+def extract_from_pdf(pdf_bytes):
     images = convert_from_bytes(pdf_bytes)
-    return np.array(images[0])
+    return extract_signature_from_image(images[0])
 
-# -------------------------
-# VERIFY FUNCTION
-# -------------------------
-def verify(sig1, sig2):
-    sig1 = transform(sig1).unsqueeze(0)
-    sig2 = transform(sig2).unsqueeze(0)
-
-    with torch.no_grad():
-        f1, f2 = model(sig1, sig2)
-        distance = torch.nn.functional.pairwise_distance(f1, f2)
-
-    return distance.item()
-
-# -------------------------
+# -------------------------------
 # STREAMLIT UI
-# -------------------------
+# -------------------------------
 st.title("✍️ Signature Forgery Detection")
-st.markdown("Upload **Reference Signature** and **Document / Signature to Verify**")
+st.write("Upload a **reference signature** and a **document (image or PDF)**.")
 
 ref_file = st.file_uploader("Upload Reference Signature", type=["png","jpg","jpeg"])
-doc_file = st.file_uploader("Upload Document or Signature", type=["png","jpg","jpeg","pdf"])
-
-threshold = st.slider("Forgery Threshold (lower = stricter)", 0.3, 2.0, 1.0)
+doc_file = st.file_uploader("Upload Document (Image / PDF)", type=["png","jpg","jpeg","pdf"])
 
 if ref_file and doc_file:
-    ref_img = Image.open(ref_file).convert("RGB")
+    ref_img = Image.open(ref_file)
+    st.image(ref_img, caption="Reference Signature", width=250)
 
     if doc_file.type == "application/pdf":
-        doc_img = pdf_to_image(doc_file.read())
+        signature_img = extract_from_pdf(doc_file.read())
     else:
-        doc_img = np.array(Image.open(doc_file).convert("RGB"))
+        signature_img = extract_signature_from_image(Image.open(doc_file))
 
-    extracted = extract_signature(doc_img)
-
-    if extracted is None:
-        st.error("❌ No signature detected in document")
+    if signature_img is None:
+        st.error("❌ Signature not detected in document")
     else:
-        test_img = Image.fromarray(extracted)
+        st.image(signature_img, caption="Extracted Signature", width=250)
 
-        dist = verify(ref_img, test_img)
+        with torch.no_grad():
+            ref_tensor = preprocess_image(ref_img)
+            doc_tensor = preprocess_image(signature_img)
+            emb1, emb2 = model(ref_tensor, doc_tensor)
+            score = cosine_similarity(emb1, emb2)
 
-        st.image([ref_img, test_img], caption=["Reference", "Extracted"], width=250)
+        st.markdown("---")
+        st.write(f"### Similarity Score: **{score:.3f}**")
 
-        st.write(f"### Distance: `{dist:.4f}`")
-
-        if dist < threshold:
+        if score >= THRESHOLD:
             st.success("✅ Genuine Signature")
         else:
             st.error("❌ Forged Signature")
+
