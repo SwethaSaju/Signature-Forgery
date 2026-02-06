@@ -42,12 +42,16 @@ class SiameseNetwork(nn.Module):
 @st.cache_resource
 def load_model():
     model = SiameseNetwork()
-    state = torch.load("siamese_signature.pth", map_location="cpu", weights_only=True)
+
+    state = torch.load(
+        "siamese_signature.pth",
+        map_location="cpu",
+        weights_only=False   # 🔥 CRITICAL FIX
+    )
+
     model.load_state_dict(state)
     model.eval()
     return model
-
-model = load_model()
 
 # ------------------ IMAGE UTILS ------------------
 
